@@ -31,6 +31,7 @@ CameraUniform :: struct {
 PixelWorld :: struct {
     density: wgpu.Texture,
     emission: wgpu.Texture,
+    colour: wgpu.Texture,
 
     layout: wgpu.BindGroupLayout,
     bind_group: wgpu.BindGroup
@@ -43,11 +44,10 @@ main :: proc () {
     wgpu_init(on_wgpu)
 
     on_wgpu :: proc() {
-        fmt.println(size_of(CameraUniform))
-
+        fmt.println("WGPU initialized")
+        
         world_init()
 
-        fmt.println("WGPU initialized")
         shader :: string(#load("shader/shader.wgsl"))
 
         pipeline_state.module = wgpu.DeviceCreateShaderModule(wgpu_state.device, &wgpu.ShaderModuleDescriptor{
