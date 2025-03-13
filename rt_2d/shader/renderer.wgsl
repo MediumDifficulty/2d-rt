@@ -1,36 +1,17 @@
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) tex_coords: vec2<f32>,
-};
-
 struct CameraUniform {
     resolution: vec2<f32>,
     centre: vec2<f32>,
     zoom: f32
 }
 
-@group(0) @binding(0) var<uniform> camera: CameraUniform;
+@group(0) @binding(0) var surface_texture_in: texture_storage_2d<rgba32float, read>;
+@group(0) @binding(1) var surface_texture_out: texture_storage_2d<rgba32float, write>;
 
 @group(1) @binding(0) var density: texture_storage_2d<r32uint, read>;
 @group(1) @binding(1) var emission: texture_storage_2d<r32float, read>;
+@group(1) @binding(2) var colour: texture_storage_2d<rgba32float, read>;
 
-@vertex
-fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
-    var result: VertexOutput;
-    let x = i32(vertex_index) / 2;
-    let y = i32(vertex_index) & 1;
-    let tc = vec2<f32>(
-        f32(x) * 2.0,
-        f32(y) * 2.0
-    );
-    result.position = vec4<f32>(
-        tc.x * 2.0 - 1.0,
-        1.0 - tc.y * 2.0,
-        0.0, 1.0
-    );
-    result.tex_coords = tc;
-    return result;
-}
+@group(2) @binding(0) var<uniform> camera: CameraUniform;
 
 struct HitResult {
     cell: vec2i,
@@ -130,11 +111,11 @@ fn random_unit(pos: vec2f) -> vec2f {
 
 const SAMPLE_COUNT = 500;
 
-fn sample(world_pos: vec2f, screen_pos: vec2f) -> vec3f {
+fn sample(world_pos: vec2f, screen_pos: vec2u) -> vec3f {
     var cumulative = vec3f(0., 0., 0.);
 
     for (var i = 0; i < SAMPLE_COUNT; i++) {
-        let dir = random_unit(screen_pos * 500. + f32(i) * 20.);
+        let dir = random_unit(vec2f(screen_pos) + f32(i) * 20.);
         let ray = cast_ray(world_pos, dir);
         if (ray.hit) {
             cumulative += vec3f(textureLoad(emission, ray.cell).r);
@@ -144,25 +125,21 @@ fn sample(world_pos: vec2f, screen_pos: vec2f) -> vec3f {
     return cumulative / f32(SAMPLE_COUNT);
 }
 
-@fragment
-fn fs_main(vertex: VertexOutput) -> @location(0) vec4<f32> {
-    let world_pos = (vertex.tex_coords * camera.resolution - camera.resolution / 2.) * camera.zoom + camera.centre;
+@compute @workgroup_size(8, 8, 1)
+fn sample_kernel(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let world_pos = (vec2f(global_id.xy) - camera.resolution / 2.) * camera.zoom + camera.centre;
 
     let cell = world_pos / 50.;
 
     let solid = textureLoad(density, vec2i(world_pos)).r == 1u;
 
+    var col: vec3f;
     if (!solid) {
-        let ret = sample(world_pos, vertex.tex_coords);
-        return vec4f(ret, 1.0);
-        // let r = hash(vertex.tex_coords * 500.);
-        // return vec4f(r, r, r, 1.0);
-        // return vec4f(random_unit(pos), 0.0, 1.0);
+        let ret = sample(world_pos, global_id.xy);
+        col = ret;
+    } else {
+        col = vec3f(max(textureLoad(emission, vec2i(world_pos)).r * f32(solid), 0.01));
     }
-    
 
-    let col = max(textureLoad(emission, vec2i(world_pos)).r * f32(solid), 0.01);
-
-    return vec4f(col, col, col, 1.);
+    textureStore(surface_texture_out, vec2i(global_id.xy), vec4f(col, 1.0));
 }
-

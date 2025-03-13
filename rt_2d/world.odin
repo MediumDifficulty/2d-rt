@@ -35,7 +35,7 @@ world_init :: proc() {
         entries = raw_data([]wgpu.BindGroupLayoutEntry{
             wgpu.BindGroupLayoutEntry {
                 binding = 0,
-                visibility = { .Fragment },
+                visibility = { .Compute },
                 storageTexture = wgpu.StorageTextureBindingLayout{
                     access = .ReadOnly,
                     format = .R32Uint,
@@ -44,7 +44,7 @@ world_init :: proc() {
             },
             wgpu.BindGroupLayoutEntry {
                 binding = 1,
-                visibility = { .Fragment },
+                visibility = { .Compute },
                 storageTexture = wgpu.StorageTextureBindingLayout{
                     access = .ReadOnly,
                     format = .R32Float,
@@ -53,7 +53,7 @@ world_init :: proc() {
             },
             wgpu.BindGroupLayoutEntry {
                 binding = 2,
-                visibility = { .Fragment },
+                visibility = { .Compute },
                 storageTexture = wgpu.StorageTextureBindingLayout{
                     access = .ReadOnly,
                     format = .RGBA32Float,

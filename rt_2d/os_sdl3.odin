@@ -43,26 +43,25 @@ os_run :: proc () {
                         break main_loop
                     }
                     if e.key.key == SDL.K_W {
-                        pipeline_state.camera.centre[1] -= pipeline_state.camera.zoom * 10.
+                        compute_pipeline_state.camera.centre[1] -= compute_pipeline_state.camera.zoom * 10.
                     }
                     if e.key.key == SDL.K_S {
-                        pipeline_state.camera.centre[1] += pipeline_state.camera.zoom * 10.
+                        compute_pipeline_state.camera.centre[1] += compute_pipeline_state.camera.zoom * 10.
                     }
                     if e.key.key == SDL.K_A {
-                        pipeline_state.camera.centre[0] -= pipeline_state.camera.zoom * 10.
+                        compute_pipeline_state.camera.centre[0] -= compute_pipeline_state.camera.zoom * 10.
                     }
                     if e.key.key == SDL.K_D {
-                        pipeline_state.camera.centre[0] += pipeline_state.camera.zoom * 10.
+                        compute_pipeline_state.camera.centre[0] += compute_pipeline_state.camera.zoom * 10.
                     }
                 case .MOUSE_WHEEL:
                     if e.wheel.y < 0 {
-                        pipeline_state.camera.zoom *= 1.1
+                        compute_pipeline_state.camera.zoom *= 1.1
                     } else {
-                        pipeline_state.camera.zoom /= 1.1
+                        compute_pipeline_state.camera.zoom /= 1.1
                     }
             }
         }
-
         
         frame()
     }
