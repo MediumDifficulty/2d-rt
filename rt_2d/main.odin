@@ -5,6 +5,7 @@ import "vendor:wgpu"
 import "core:math/linalg"
 import "base:runtime"
 import "core:math/rand"
+import "core:time"
 
 state: struct {
     os: OS
@@ -32,13 +33,19 @@ renderer_pipeline_state : struct {
     camera: RendererCameraUniform
 }
 
-shared_textures : struct {
+ViewedTexture :: struct {
+    texture: wgpu.Texture,
+    view: wgpu.TextureView,
+}
+
+screen_space_textures : struct {
     textures: [2]struct {
-        surface_texture: wgpu.Texture,
-        view: wgpu.TextureView,
+        surface_texture: ViewedTexture,
+        sample_count: ViewedTexture,
         compute_bind_group: wgpu.BindGroup,
-        render_bind_group: wgpu.BindGroup,
     },
+
+    render_bind_groups: [2]wgpu.BindGroup,
 
     compute_layout: wgpu.BindGroupLayout,
     render_layout: wgpu.BindGroupLayout,
@@ -50,6 +57,8 @@ CameraUniform :: struct {
     resolution: [2]f32,
     centre: linalg.Vector2f32,
     zoom: f32,
+    entropy: f32,
+    moved: u32, // Acts as bool Bool
     _padding: [8]u8
 }
 
@@ -76,7 +85,7 @@ main :: proc () {
         fmt.println("WGPU initialized")
 
         world_init()
-        shared_texture_init()
+        screen_space_texture_init()
 
         compute_init()
         renderer_init()
@@ -88,9 +97,9 @@ main :: proc () {
     }
 }
 
-shared_texture_init :: proc() {
-    for &texture, i in shared_textures.textures {
-        texture.surface_texture = wgpu.DeviceCreateTexture(wgpu_state.device, &wgpu.TextureDescriptor{
+screen_space_texture_init :: proc() {
+    viewed_texture_init :: proc(format: wgpu.TextureFormat) -> ViewedTexture {
+        texture := wgpu.DeviceCreateTexture(wgpu_state.device, &wgpu.TextureDescriptor{
             size = wgpu.Extent3D{
                 width = wgpu_state.config.width,
                 height = wgpu_state.config.height,
@@ -100,38 +109,58 @@ shared_texture_init :: proc() {
             sampleCount = 1,
     
             dimension = ._2D,
-            format = .RGBA32Float,
+            format = format,
             usage = { .StorageBinding }
         })
 
-        texture.view = wgpu.TextureCreateView(shared_textures.textures[i].surface_texture, nil)
+        view := wgpu.TextureCreateView(texture)
+
+        return ViewedTexture {
+            texture,
+            view
+        }
     }
 
-    shared_textures.compute_layout = wgpu.DeviceCreateBindGroupLayout(wgpu_state.device, &wgpu.BindGroupLayoutDescriptor{
-        entryCount = 2,
-        entries = raw_data([]wgpu.BindGroupLayoutEntry{
-            wgpu.BindGroupLayoutEntry{
-                binding = 0,
-                visibility = { .Compute },
-                storageTexture = wgpu.StorageTextureBindingLayout{
-                    access = wgpu.StorageTextureAccess.ReadOnly,
-                    format = wgpu.TextureFormat.RGBA32Float,
-                    viewDimension = wgpu.TextureViewDimension._2D
-                }
-            },
-            wgpu.BindGroupLayoutEntry{
-                binding = 1,
-                visibility = { .Compute },
-                storageTexture = wgpu.StorageTextureBindingLayout{
-                    access = wgpu.StorageTextureAccess.WriteOnly,
-                    format = wgpu.TextureFormat.RGBA32Float,
-                    viewDimension = wgpu.TextureViewDimension._2D
-                }
+    bind_group_layout_entry :: proc(binding: u32, format: wgpu.TextureFormat, read: bool) -> wgpu.BindGroupLayoutEntry {
+        return wgpu.BindGroupLayoutEntry{
+            binding = binding,
+            visibility = { .Compute },
+            storageTexture = wgpu.StorageTextureBindingLayout{
+                access = wgpu.StorageTextureAccess.ReadOnly if read else wgpu.StorageTextureAccess.WriteOnly,
+                format = format,
+                viewDimension = wgpu.TextureViewDimension._2D
             }
+        }
+    }
+
+    bind_group_entry :: proc(binding: u32, view: wgpu.TextureView) -> wgpu.BindGroupEntry {
+        texture_size := size_of([4]f32) * u64(wgpu_state.config.width * wgpu_state.config.height)
+
+        return wgpu.BindGroupEntry{
+            binding = binding,
+            textureView = view,
+            offset = 0,
+            size = texture_size,
+        }
+    }
+
+    for &texture, i in screen_space_textures.textures {
+        texture.surface_texture = viewed_texture_init(wgpu.TextureFormat.RGBA32Float)
+        texture.sample_count = viewed_texture_init(wgpu.TextureFormat.R32Uint)
+    }
+
+    screen_space_textures.compute_layout = wgpu.DeviceCreateBindGroupLayout(wgpu_state.device, &wgpu.BindGroupLayoutDescriptor{
+        entryCount = 4,
+        entries = raw_data([]wgpu.BindGroupLayoutEntry{
+            bind_group_layout_entry(0, wgpu.TextureFormat.RGBA32Float, true),
+            bind_group_layout_entry(1, wgpu.TextureFormat.RGBA32Float, false),
+
+            bind_group_layout_entry(2, wgpu.TextureFormat.R32Uint, true),
+            bind_group_layout_entry(3, wgpu.TextureFormat.R32Uint, false),
         })
     })
 
-    shared_textures.render_layout = wgpu.DeviceCreateBindGroupLayout(wgpu_state.device, &wgpu.BindGroupLayoutDescriptor{
+    screen_space_textures.render_layout = wgpu.DeviceCreateBindGroupLayout(wgpu_state.device, &wgpu.BindGroupLayoutDescriptor{
         entryCount = 1,
         entries = raw_data([]wgpu.BindGroupLayoutEntry{
             wgpu.BindGroupLayoutEntry{
@@ -146,34 +175,28 @@ shared_texture_init :: proc() {
         })
     })
 
-    for &texture, i in shared_textures.textures {
-        texture_size := size_of([4]f32) * u64(wgpu_state.config.width * wgpu_state.config.height)
+    for &texture, i in screen_space_textures.textures {
         texture.compute_bind_group = wgpu.DeviceCreateBindGroup(wgpu_state.device, &wgpu.BindGroupDescriptor{
-            layout = shared_textures.compute_layout,
-            entryCount = 2,
+            layout = screen_space_textures.compute_layout,
+            entryCount = 4,
             entries = raw_data([]wgpu.BindGroupEntry{
-                wgpu.BindGroupEntry{
-                    binding = 0,
-                    textureView = shared_textures.textures[1 - i].view,
-                    offset = 0,
-                    size = texture_size,
-                },
-                wgpu.BindGroupEntry{
-                    binding = 1,
-                    textureView = shared_textures.textures[i].view,
-                    offset = 0,
-                    size = texture_size,
-                }
+                bind_group_entry(0, screen_space_textures.textures[1 - i].surface_texture.view),
+                bind_group_entry(1, screen_space_textures.textures[    i].surface_texture.view),
+
+                bind_group_entry(2, screen_space_textures.textures[1 - i].sample_count.view),
+                bind_group_entry(3, screen_space_textures.textures[    i].sample_count.view),
             })
         })
 
-        texture.render_bind_group = wgpu.DeviceCreateBindGroup(wgpu_state.device, &wgpu.BindGroupDescriptor{
-            layout = shared_textures.render_layout,
+        texture_size := size_of([4]f32) * u64(wgpu_state.config.width * wgpu_state.config.height)
+
+        screen_space_textures.render_bind_groups[i] = wgpu.DeviceCreateBindGroup(wgpu_state.device, &wgpu.BindGroupDescriptor{
+            layout = screen_space_textures.render_layout,
             entryCount = 1,
             entries = raw_data([]wgpu.BindGroupEntry{
                 wgpu.BindGroupEntry{
                     binding = 0,
-                    textureView = shared_textures.textures[i].view,
+                    textureView = screen_space_textures.textures[i].surface_texture.view,
                     offset = 0,
                     size = texture_size,
                 }
@@ -227,7 +250,7 @@ compute_init :: proc() {
 
     compute_pipeline_state.pipeline_layout = wgpu.DeviceCreatePipelineLayout(wgpu_state.device, &wgpu.PipelineLayoutDescriptor{
         bindGroupLayoutCount = 3,
-        bindGroupLayouts = raw_data([]wgpu.BindGroupLayout{ shared_textures.compute_layout, world.layout, compute_pipeline_state.uniform_layout }),
+        bindGroupLayouts = raw_data([]wgpu.BindGroupLayout{ screen_space_textures.compute_layout, world.layout, compute_pipeline_state.uniform_layout }),
     })
 
     compute_pipeline_state.pipeline = wgpu.DeviceCreateComputePipeline(wgpu_state.device, &wgpu.ComputePipelineDescriptor{
@@ -288,7 +311,7 @@ renderer_init :: proc() {
 
     renderer_pipeline_state.pipeline_layout = wgpu.DeviceCreatePipelineLayout(wgpu_state.device, &wgpu.PipelineLayoutDescriptor{
         bindGroupLayoutCount = 2,
-        bindGroupLayouts = raw_data([]wgpu.BindGroupLayout{ shared_textures.render_layout, renderer_pipeline_state.uniform_layout })
+        bindGroupLayouts = raw_data([]wgpu.BindGroupLayout{ screen_space_textures.render_layout, renderer_pipeline_state.uniform_layout })
     })
 
     renderer_pipeline_state.pipeline = wgpu.DeviceCreateRenderPipeline(wgpu_state.device, &wgpu.RenderPipelineDescriptor{
@@ -336,13 +359,15 @@ frame :: proc "c" () {
     }
     defer wgpu.TextureRelease(surface_texture.texture)
 
+    compute_pipeline_state.camera.entropy = f32(time._now()._nsec % 1_000_000) / 1_000_000.
+
     frame := wgpu.TextureCreateView(surface_texture.texture, nil)
     defer wgpu.TextureViewRelease(frame)
 
     compute_pass()
     viewport_pass(frame)
     
-    shared_textures.polarity = !shared_textures.polarity
+    screen_space_textures.polarity = !screen_space_textures.polarity
 
     wgpu.SurfacePresent(wgpu_state.surface)
 }
@@ -353,12 +378,10 @@ compute_pass :: proc() {
     command_encoder := wgpu.DeviceCreateCommandEncoder(wgpu_state.device, nil)
     defer wgpu.CommandEncoderRelease(command_encoder)
 
-    compute_pass_encoder := wgpu.CommandEncoderBeginComputePass(command_encoder, &wgpu.ComputePassDescriptor{
-
-    })
+    compute_pass_encoder := wgpu.CommandEncoderBeginComputePass(command_encoder, nil)
 
     wgpu.ComputePassEncoderSetPipeline(compute_pass_encoder, compute_pipeline_state.pipeline)
-    wgpu.ComputePassEncoderSetBindGroup(compute_pass_encoder, 0, shared_textures.textures[uint(shared_textures.polarity)].compute_bind_group)
+    wgpu.ComputePassEncoderSetBindGroup(compute_pass_encoder, 0, screen_space_textures.textures[uint(screen_space_textures.polarity)].compute_bind_group)
     wgpu.ComputePassEncoderSetBindGroup(compute_pass_encoder, 1, world.bind_group)
     wgpu.ComputePassEncoderSetBindGroup(compute_pass_encoder, 2, compute_pipeline_state.uniform_bind_group)
 
@@ -393,7 +416,7 @@ viewport_pass :: proc(frame: wgpu.TextureView) {
     })
 
     wgpu.RenderPassEncoderSetPipeline(render_pass_encoder, renderer_pipeline_state.pipeline)
-    wgpu.RenderPassEncoderSetBindGroup(render_pass_encoder, 0, shared_textures.textures[uint(shared_textures.polarity)].render_bind_group)
+    wgpu.RenderPassEncoderSetBindGroup(render_pass_encoder, 0, screen_space_textures.render_bind_groups[uint(screen_space_textures.polarity)])
     wgpu.RenderPassEncoderSetBindGroup(render_pass_encoder, 1, renderer_pipeline_state.uniform_bind_group)
 
     wgpu.RenderPassEncoderDraw(render_pass_encoder, 3, 1, 0, 0)

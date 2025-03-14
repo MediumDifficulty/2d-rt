@@ -18,7 +18,7 @@ os_init :: proc() {
     }
 
     state.os.window = SDL.CreateWindow(
-        "Mandelbrot Set Viewer",
+        "2D RT",
         800,
         600,
         {.RESIZABLE, .HIGH_PIXEL_DENSITY}
@@ -32,6 +32,7 @@ os_init :: proc() {
 os_run :: proc () {
     main_loop: for {
         e: SDL.Event
+        compute_pipeline_state.camera.moved = 0
         for SDL.PollEvent(&e) {
             #partial switch e.type {
                 case .QUIT:
@@ -44,21 +45,27 @@ os_run :: proc () {
                     }
                     if e.key.key == SDL.K_W {
                         compute_pipeline_state.camera.centre[1] -= compute_pipeline_state.camera.zoom * 10.
+                        compute_pipeline_state.camera.moved = 1
                     }
                     if e.key.key == SDL.K_S {
                         compute_pipeline_state.camera.centre[1] += compute_pipeline_state.camera.zoom * 10.
+                        compute_pipeline_state.camera.moved = 1
                     }
                     if e.key.key == SDL.K_A {
                         compute_pipeline_state.camera.centre[0] -= compute_pipeline_state.camera.zoom * 10.
+                        compute_pipeline_state.camera.moved = 1
                     }
                     if e.key.key == SDL.K_D {
                         compute_pipeline_state.camera.centre[0] += compute_pipeline_state.camera.zoom * 10.
+                        compute_pipeline_state.camera.moved = 1
                     }
                 case .MOUSE_WHEEL:
                     if e.wheel.y < 0 {
                         compute_pipeline_state.camera.zoom *= 1.1
+                        compute_pipeline_state.camera.moved = 1
                     } else {
                         compute_pipeline_state.camera.zoom /= 1.1
+                        compute_pipeline_state.camera.moved = 1
                     }
             }
         }

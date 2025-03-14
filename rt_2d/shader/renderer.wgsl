@@ -1,11 +1,16 @@
 struct CameraUniform {
     resolution: vec2<f32>,
     centre: vec2<f32>,
-    zoom: f32
+    zoom: f32,
+    entropy: f32,
+    moved: u32,
 }
 
 @group(0) @binding(0) var surface_texture_in: texture_storage_2d<rgba32float, read>;
 @group(0) @binding(1) var surface_texture_out: texture_storage_2d<rgba32float, write>;
+
+@group(0) @binding(2) var sample_count_in: texture_storage_2d<r32uint, read>;
+@group(0) @binding(3) var sample_count_out: texture_storage_2d<r32uint, write>;
 
 @group(1) @binding(0) var density: texture_storage_2d<r32uint, read>;
 @group(1) @binding(1) var emission: texture_storage_2d<r32float, read>;
@@ -85,7 +90,7 @@ const W1 = 0.308517;
 // https://www.shadertoy.com/view/XlGcRh
 // UE4's RandFast function
 fn hash(u: vec2f) -> f32 {
-    var v = u;
+    var v = u + camera.entropy;
     v = (1./4320.) * v + vec2(0.25,0.);
     let state = fract( dot( v * v, vec2f(3571.)));
     return fract( state * state * (3571. * 2.));
@@ -109,7 +114,7 @@ fn random_unit(pos: vec2f) -> vec2f {
     return normalize(v);
 }
 
-const SAMPLE_COUNT = 500;
+const SAMPLE_COUNT = 100;
 
 fn sample(world_pos: vec2f, screen_pos: vec2u) -> vec3f {
     var cumulative = vec3f(0., 0., 0.);
@@ -129,8 +134,6 @@ fn sample(world_pos: vec2f, screen_pos: vec2u) -> vec3f {
 fn sample_kernel(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let world_pos = (vec2f(global_id.xy) - camera.resolution / 2.) * camera.zoom + camera.centre;
 
-    let cell = world_pos / 50.;
-
     let solid = textureLoad(density, vec2i(world_pos)).r == 1u;
 
     var col: vec3f;
@@ -140,6 +143,20 @@ fn sample_kernel(@builtin(global_invocation_id) global_id: vec3<u32>) {
     } else {
         col = vec3f(max(textureLoad(emission, vec2i(world_pos)).r * f32(solid), 0.01));
     }
+    
+    var new_count: u32;
+    var new_col: vec3f;
 
-    textureStore(surface_texture_out, vec2i(global_id.xy), vec4f(col, 1.0));
+    if camera.moved == 1u {
+        new_count = 1u;
+        new_col = col;
+    } else {
+        let current_col = textureLoad(surface_texture_in, vec2i(global_id.xy)).rgb;
+        new_count = textureLoad(sample_count_in, vec2i(global_id.xy)).r + 1u;
+        new_col = current_col + (col - current_col) / f32(new_count);
+    }
+     
+
+    textureStore(surface_texture_out, vec2i(global_id.xy), vec4f(new_col, 1.0));
+    textureStore(sample_count_out, vec2i(global_id.xy), vec4u(new_count, 0u, 0u, 0u));
 }
