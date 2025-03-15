@@ -19,11 +19,13 @@ struct CameraUniform {
 @group(2) @binding(0) var<uniform> camera: CameraUniform;
 
 struct HitResult {
+    hit: bool,
     cell: vec2i,
-    hit: bool
+    pos: vec2f,
+    normal: vec2i    
 }
 
-const MAX_RAY_LENGTH = 10.;
+const MAX_RAY_LENGTH = 50.;
 
 fn cast_ray(pos: vec2f, dir: vec2f) -> HitResult {
     let dydx = dir.y / dir.x;
@@ -58,10 +60,12 @@ fn cast_ray(pos: vec2f, dir: vec2f) -> HitResult {
             current_cell.x += step.x;
             distance = ray_length.x;
             ray_length.x += ray_step_size.x;
+            result.normal = vec2i(-step.x, 0);
         } else {
             current_cell.y += step.y;
             distance = ray_length.y;
             ray_length.y += ray_step_size.y;
+            result.normal = vec2i(0, -step.y);
         }
 
         let cell = textureLoad(density, current_cell).r;
@@ -69,6 +73,7 @@ fn cast_ray(pos: vec2f, dir: vec2f) -> HitResult {
         if cell == 1u {
             result.cell = current_cell;
             result.hit = true;
+            result.pos = pos + distance * dir;
             return result;
         }
     }
@@ -105,8 +110,8 @@ fn random_unit(pos: vec2f) -> vec2f {
     var l = dot(v, v);
     for (var i = 0; i < 50 && (l > 1. || l < 0.0000001); i++) {
         v = vec2f(
-            hash(pos + vec2f(f32(i) * 5.1, 0.3)),
-            hash(pos + vec2f(0.7, f32(i) * 6.3)),
+            hash(v * 100. + vec2f(f32(i) * 5.1, 0.3)),
+            hash(v * 100. + vec2f(0.7, f32(i) * 6.3)),
         ) - 0.5;
         l = dot(v, v);
     }
@@ -114,21 +119,66 @@ fn random_unit(pos: vec2f) -> vec2f {
     return normalize(v);
 }
 
-const SAMPLE_COUNT = 100;
+fn random_semi(pos: vec2f, normal: vec2i) -> vec2f {
+    let rand = random_unit(pos);
+
+    if (normal.x != 0) {
+        return vec2f(
+            abs(rand.x) * f32(normal.x),
+            rand.y
+        );
+    } else {
+        return vec2f(
+            rand.x,
+            abs(rand.y) * f32(normal.y)
+        );
+    }
+}
+
+const BOUNCES = 5;
+
+fn send_ray(world_pos: vec2f, world_dir: vec2f) -> vec3f {
+    var pos = world_pos;
+    var dir = world_dir;
+    var transmission = 1.;
+    var col = vec3f(0.);
+
+    for (var i = 0; i < BOUNCES; i++) {
+        let ray = cast_ray(pos, dir);
+
+        if (!ray.hit) {
+            return col;
+        }
+
+        pos = ray.pos;
+
+        col += transmission * textureLoad(emission, ray.cell).r * textureLoad(colour, ray.cell).rgb;
+
+        transmission *= 0.6;
+
+        dir = random_semi(dir, ray.normal);
+    }
+
+    return col;
+}
+
+const SAMPLE_COUNT = 50;
 
 fn sample(world_pos: vec2f, screen_pos: vec2u) -> vec3f {
     var cumulative = vec3f(0., 0., 0.);
 
+    var dir = random_unit(vec2f(screen_pos));
     for (var i = 0; i < SAMPLE_COUNT; i++) {
-        let dir = random_unit(vec2f(screen_pos) + f32(i) * 20.);
-        let ray = cast_ray(world_pos, dir);
-        if (ray.hit) {
-            cumulative += vec3f(textureLoad(emission, ray.cell).r);
-        }
+        let dir = random_unit(dir + f32(i) * vec2f(2.0, 7.0));
+        let col = send_ray(world_pos, dir);
+    
+        cumulative += col;
     }
 
     return cumulative / f32(SAMPLE_COUNT);
 }
+
+const MIN_BRIGHTNESS = 0.01;
 
 @compute @workgroup_size(8, 8, 1)
 fn sample_kernel(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -141,7 +191,10 @@ fn sample_kernel(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let ret = sample(world_pos, global_id.xy);
         col = ret;
     } else {
-        col = vec3f(max(textureLoad(emission, vec2i(world_pos)).r * f32(solid), 0.01));
+        let base_col = textureLoad(colour, vec2i(world_pos)).rgb;
+        let emission = textureLoad(emission, vec2i(world_pos)).r;
+
+        col = vec3f(base_col * max(emission, MIN_BRIGHTNESS));
     }
     
     var new_count: u32;

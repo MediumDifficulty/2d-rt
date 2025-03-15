@@ -3,6 +3,7 @@ package rt_2d
 import "vendor:wgpu"
 import "core:math/linalg"
 import "core:math/rand"
+import "core:math"
 
 WORLD_SIZE :: [2]u32{128, 128}
 WORLD_CELLS :: WORLD_SIZE[0] * WORLD_SIZE[1]
@@ -31,7 +32,7 @@ world_init :: proc() {
     world.colour = create_texture(wgpu.TextureFormat.RGBA32Float)
 
     world.layout = wgpu.DeviceCreateBindGroupLayout(wgpu_state.device, &wgpu.BindGroupLayoutDescriptor{
-        entryCount = 2,
+        entryCount = 3,
         entries = raw_data([]wgpu.BindGroupLayoutEntry{
             wgpu.BindGroupLayoutEntry {
                 binding = 0,
@@ -64,7 +65,7 @@ world_init :: proc() {
     })
 
     world.bind_group = wgpu.DeviceCreateBindGroup(wgpu_state.device, &wgpu.BindGroupDescriptor{
-        entryCount = 2,
+        entryCount = 3,
         entries = raw_data([]wgpu.BindGroupEntry{
             wgpu.BindGroupEntry{
                 binding = 0,
@@ -81,32 +82,15 @@ world_init :: proc() {
             wgpu.BindGroupEntry{
                 binding = 2,
                 offset = 0,
-                size = u64(WORLD_CELLS) * size_of(f32),
-                textureView = wgpu.TextureCreateView(world.emission)
+                size = u64(WORLD_CELLS) * size_of([4]f32),
+                textureView = wgpu.TextureCreateView(world.colour)
             }
         }),
         layout = world.layout,
     })
 
-    data := new(#soa[WORLD_CELLS]struct {
-        density: u32,
-        emission: f32,
-        colour: [4]f32
-    })
-    defer free(data)
-
-    for y in 0..<WORLD_SIZE[1] {
-        for x in 0..<WORLD_SIZE[0] {
-            if rand.uint32() % 10 == 0 {
-                cell := &data[y * WORLD_SIZE[1] + x]
-
-                emission_fac := max(rand.float32() - 0.5, 0.) * 2.
-
-                cell.density = 1
-                cell.emission = emission_fac
-            }
-        }
-    }
+    world_data := generate_world()
+    defer free(world_data)
 
     write_texture :: proc(src: rawptr, dest: wgpu.Texture, cell_size: uint) {
         wgpu.QueueWriteTexture(wgpu_state.queue,
@@ -129,7 +113,66 @@ world_init :: proc() {
         )
     }
 
-    write_texture(&data.density, world.density, size_of(u32))
-    write_texture(&data.emission, world.emission, size_of(f32))
-    write_texture(&data.colour, world.colour, size_of([4]f32))
+    write_texture(&world_data.density, world.density, size_of(u32))
+    write_texture(&world_data.emission, world.emission, size_of(f32))
+    write_texture(&world_data.colour, world.colour, size_of([4]f32))
+}
+
+@(private="file")
+WorldData :: #soa[WORLD_CELLS]WorldCell
+
+@(private="file")
+WorldCell :: struct {
+    density: u32,
+    emission: f32,
+    colour: [4]f32
+}
+
+@(private="file")
+generate_world :: proc() -> (data: ^WorldData) {
+    data = new(WorldData)
+
+    fill_cell :: proc(cell: u32, world: ^WorldData) {
+        if rand.uint32() % 10 != 0 {
+            cell := &world[cell]
+            cell.density = 1
+            cell.colour = { 1., 1., 1., 0., }
+        }
+    }
+
+    cells := uint(math.sqrt(f64(WORLD_CELLS)))
+
+    for cell in 0..<cells {
+        width, height := rand.uint32() % 10 + 5, rand.uint32() % 10 + 5
+        x, y := rand.uint32() % (WORLD_SIZE.x - width), rand.uint32() %(WORLD_SIZE.y - height)
+
+        for i in 0..=width {
+            fill_cell(y * WORLD_SIZE.y + x + i, data)
+        }
+        for i in 0..=width {
+            fill_cell((y + height) * WORLD_SIZE.y + x + i, data)
+        }
+        for i in 0..=height {
+            fill_cell((y + i) * WORLD_SIZE.y + x, data)
+        }
+        for i in 0..=height {
+            fill_cell((y + i) * WORLD_SIZE.y + x + width, data)
+        }
+    }
+
+    for y in 0..<WORLD_SIZE[1] {
+        for x in 0..<WORLD_SIZE[0] {
+            if rand.uint32() % 100 == 0 {
+                cell := &data[y * WORLD_SIZE[1] + x]
+
+                // emission_fac := max(rand.float32() - 0.5, 0.) * 2.
+
+                cell.density = 1
+                cell.emission = 1.
+                cell.colour = { 1., 1., 1., 0., }
+            }
+        }
+    }
+
+    return
 }

@@ -7,8 +7,11 @@
 
 ## Additions
 3. [x] Progressive rendering
-4. [ ] Temporal reprojection
-5. [ ] Bounce lighting
-6. [ ] Coloured world
-7. [ ] Radiance Cache
-8. [ ] Photon mapping?
+4. [ ] Profiling
+5. [ ] GUI
+6. [ ] Temporal reprojection
+7. [x] Global Illumination
+   1. [ ] Coloured
+8. [ ] Coloured world
+9.  [ ] Radiance Cache
+10. [ ] Photon mapping?
