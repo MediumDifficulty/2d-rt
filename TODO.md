@@ -1,7 +1,7 @@
 # TODO
 
 ## Fixes
-1. [ ] Fix Resizing
+1. [x] Fix Resizing
 2. [ ] Fix Patterns in render
 3. [ ] Fix Cleanups
 

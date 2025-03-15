@@ -58,7 +58,7 @@ CameraUniform :: struct {
     centre: linalg.Vector2f32,
     zoom: f32,
     entropy: f32,
-    moved: u32, // Acts as bool Bool
+    moved: u32, // Acts as a Bool
     _padding: [8]u8
 }
 
@@ -359,7 +359,7 @@ frame :: proc "c" () {
     }
     defer wgpu.TextureRelease(surface_texture.texture)
 
-    compute_pipeline_state.camera.entropy = f32(time._now()._nsec % 1_000_000) / 1_000_000.
+    compute_pipeline_state.camera.entropy = f32(time.now()._nsec % 1_000_000) / 1_000_000.
 
     frame := wgpu.TextureCreateView(surface_texture.texture, nil)
     defer wgpu.TextureViewRelease(frame)
@@ -431,24 +431,69 @@ viewport_pass :: proc(frame: wgpu.TextureView) {
 }
 
 render_pipeline_finish :: proc() {
+    wgpu.BufferRelease(renderer_pipeline_state.uniform_buffer)
+    wgpu.BindGroupLayoutRelease(renderer_pipeline_state.uniform_layout)
+    wgpu.BindGroupRelease(renderer_pipeline_state.uniform_bind_group)
+
 	wgpu.RenderPipelineRelease(renderer_pipeline_state.pipeline)
 	wgpu.PipelineLayoutRelease(renderer_pipeline_state.pipeline_layout)
-    
 	wgpu.ShaderModuleRelease(renderer_pipeline_state.module)
+}
+
+compute_pipeline_finish :: proc() {
+    wgpu.BufferRelease(compute_pipeline_state.uniform_buffer)
+    wgpu.BindGroupLayoutRelease(compute_pipeline_state.uniform_layout)
+    wgpu.BindGroupRelease(compute_pipeline_state.uniform_bind_group)
+
+	wgpu.ComputePipelineRelease(compute_pipeline_state.pipeline)
+	wgpu.PipelineLayoutRelease(compute_pipeline_state.pipeline_layout)
+	wgpu.ShaderModuleRelease(compute_pipeline_state.module)
+}
+
+screen_space_textures_finish :: proc() {
+    wgpu.BindGroupLayoutRelease(screen_space_textures.compute_layout)
+    wgpu.BindGroupLayoutRelease(screen_space_textures.render_layout)
+
+    for bind_group in screen_space_textures.render_bind_groups {
+        wgpu.BindGroupRelease(bind_group)
+    }
+
+    release_viewed_texture :: proc(texture: ViewedTexture) {
+        wgpu.TextureViewRelease(texture.view)
+        wgpu.TextureRelease(texture.texture)
+    }
+
+    for texture in screen_space_textures.textures {
+        wgpu.BindGroupRelease(texture.compute_bind_group)
+
+        release_viewed_texture(texture.surface_texture)
+        release_viewed_texture(texture.sample_count)
+    }
 }
 
 resize :: proc "c" () {
     context = wgpu_state.ctx
 
     fmt.println("Resized")
-    compute_pipeline_state.camera.resolution = { f32(wgpu_state.config.width), f32(wgpu_state.config.height) }
     wgpu_state.config.width, wgpu_state.config.height = os_get_framebuffer_size()
+
+    compute_pipeline_state.camera.resolution  = { f32(wgpu_state.config.width), f32(wgpu_state.config.height) }
+    renderer_pipeline_state.camera.resolution = { f32(wgpu_state.config.width), f32(wgpu_state.config.height) }
+    
+
     wgpu.SurfaceConfigure(wgpu_state.surface, &wgpu_state.config)
+
+    screen_space_textures_finish()
+    screen_space_texture_init()
 }
 
 finish :: proc "c" () {
     context = wgpu_state.ctx
 
     render_pipeline_finish()
+    compute_pipeline_finish()
+
+    screen_space_textures_finish()
+
     wgpu_finish()
 }
